@@ -1,0 +1,14 @@
+# Minimal stand-in for a generated repo's justfile, used only by this repo's CI
+# to exercise python-check.yml and node-check.yml.
+
+install app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "apps/{{app}}"
+    if [ -f pyproject.toml ]; then uv sync --locked; else pnpm install --frozen-lockfile; fi
+
+check app:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "apps/{{app}}"
+    if [ -f pyproject.toml ]; then uv run --locked python check.py; else node check.mjs; fi

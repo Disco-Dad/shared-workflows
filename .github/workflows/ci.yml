@@ -1,0 +1,43 @@
+name: CI
+
+# This repo's own checks: the security workflow on itself, plus a run of each
+# check workflow against the fixture apps in tests/fixture/. ci-ok is the one
+# required status check on main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: ./.github/workflows/security.yml
+
+  python-check:
+    uses: ./.github/workflows/python-check.yml
+    with:
+      app: py-fixture
+      working-directory: tests/fixture
+
+  node-check:
+    uses: ./.github/workflows/node-check.yml
+    with:
+      app: node-fixture
+      working-directory: tests/fixture
+
+  # Fails when any job above failed or was cancelled. No skips are allowed here.
+  ci-ok:
+    if: always()
+    needs: [security, python-check, node-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
