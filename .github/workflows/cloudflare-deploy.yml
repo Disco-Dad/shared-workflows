@@ -1,0 +1,135 @@
+name: Cloudflare deploy
+
+# Builds one static site under apps/<app>/ and deploys the built files to
+# Cloudflare Workers static assets with the app's own wrangler (wrangler.jsonc
+# in the app folder). The deploy job uploads exactly what the build job built;
+# it never rebuilds. The caller runs this only on main and passes
+# `secrets: inherit`; CLOUDFLARE_API_TOKEN is a secret of the GitHub environment,
+# which accepts only main. CLOUDFLARE_ACCOUNT_ID is a repository variable.
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App folder name under apps/.
+        type: string
+        required: true
+      output-dir:
+        description: Build output folder, relative to apps/<app>/.
+        type: string
+        default: dist
+      environment:
+        type: string
+        default: cloudflare-deploy
+      check-url:
+        description: Optional URL that must answer 200 after the deploy.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/${{ inputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: apps/${{ inputs.app }}/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: apps/${{ inputs.app }}/.node-version
+          cache: pnpm
+          cache-dependency-path: apps/${{ inputs.app }}/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # The app's build script includes its own gates (type check, production
+      # indexing check). Public build settings come from the app's committed
+      # .env.production, so this build needs no secrets.
+      - run: pnpm run build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-${{ inputs.app }}
+          path: apps/${{ inputs.app }}/${{ inputs.output-dir }}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: cloudflare-deploy-${{ inputs.app }}
+      cancel-in-progress: false
+      # Keep every waiting deploy (default keeps one and cancels the rest), so an
+      # older run can never push out the newest one; the stale guard below skips
+      # the older ones once they reach the front.
+      queue: max
+    defaults:
+      run:
+        working-directory: apps/${{ inputs.app }}
+    steps:
+      # Runs queue, so an older commit can reach this job after a newer one has
+      # deployed. Deploying it would roll the site back.
+      - name: Skip if main has moved on
+        id: tip
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::notice::main is at $tip, this run is $GITHUB_SHA: not deploying"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.tip.outputs.stale != 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: steps.tip.outputs.stale != 'true'
+        with:
+          package_json_file: apps/${{ inputs.app }}/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.tip.outputs.stale != 'true'
+        with:
+          node-version-file: apps/${{ inputs.app }}/.node-version
+          cache: pnpm
+          cache-dependency-path: apps/${{ inputs.app }}/pnpm-lock.yaml
+      - if: steps.tip.outputs.stale != 'true'
+        run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.tip.outputs.stale != 'true'
+        with:
+          name: site-${{ inputs.app }}
+          path: apps/${{ inputs.app }}/${{ inputs.output-dir }}
+      - name: Deploy to Cloudflare Workers
+        if: steps.tip.outputs.stale != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy
+      - name: Check the site answers
+        if: steps.tip.outputs.stale != 'true' && inputs.check-url != ''
+        env:
+          CHECK_URL: ${{ inputs.check-url }}
+        # The URL itself must answer 200; a redirect (to a login page, say) fails.
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$CHECK_URL" || true)"
+            if [ "$code" = "200" ]; then
+              echo "$CHECK_URL answered 200"
+              exit 0
+            fi
+            echo "Attempt $attempt: HTTP $code"
+            sleep 5
+          done
+          echo "::error::$CHECK_URL did not answer 200"
+          exit 1

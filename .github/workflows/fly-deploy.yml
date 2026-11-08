@@ -1,0 +1,96 @@
+name: Fly deploy
+
+# Deploys one service under apps/<app>/ (its fly.toml and Dockerfile) to Fly.io,
+# then checks /health reports the deployed commit. The caller runs this only on
+# main and passes `secrets: inherit`; FLY_API_TOKEN is a secret of the GitHub
+# environment, and the environment accepts only main.
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App folder name under apps/.
+        type: string
+        required: true
+      health-url:
+        description: Full URL of the service's /health endpoint.
+        type: string
+        required: true
+      environment:
+        type: string
+        default: fly-deploy
+      smoke-command:
+        description: >-
+          Optional shell command run after the health check, from apps/<app>/,
+          with BASE_URL set (health-url minus /health). Use it for one
+          representative request.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    # One deploy per app at a time; queued, never cancelled mid-deploy.
+    concurrency:
+      group: fly-deploy-${{ inputs.app }}
+      cancel-in-progress: false
+      # Keep every waiting deploy (default keeps one and cancels the rest), so an
+      # older run can never push out the newest one; the stale guard below skips
+      # the older ones once they reach the front.
+      queue: max
+    env:
+      APP: ${{ inputs.app }}
+      HEALTH_URL: ${{ inputs.health-url }}
+    steps:
+      # Runs queue, so an older commit can reach this job after a newer one has
+      # deployed. Deploying it would roll the service back.
+      - name: Skip if main has moved on
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "::notice::main is at $tip, this run is $GITHUB_SHA: not deploying"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.tip.outputs.stale != 'true'
+        with:
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be # 1.5
+        if: steps.tip.outputs.stale != 'true'
+      - name: Deploy
+        if: steps.tip.outputs.stale != 'true'
+        working-directory: apps/${{ inputs.app }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --build-arg "GIT_COMMIT=$GITHUB_SHA"
+      - name: Check /health reports this commit
+        if: steps.tip.outputs.stale != 'true'
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            body="$(curl -sSf --max-time 10 "$HEALTH_URL" || true)"
+            commit="$(printf '%s' "$body" | jq -r '.commit // empty' 2>/dev/null || true)"
+            if [ "$commit" = "$GITHUB_SHA" ]; then
+              echo "Healthy at $GITHUB_SHA"
+              exit 0
+            fi
+            echo "Attempt $attempt: got '${body}'"
+            sleep 6
+          done
+          echo "::error::$HEALTH_URL did not report commit $GITHUB_SHA"
+          exit 1
+      - name: Representative request
+        if: steps.tip.outputs.stale != 'true' && inputs.smoke-command != ''
+        working-directory: apps/${{ inputs.app }}
+        env:
+          SMOKE_COMMAND: ${{ inputs.smoke-command }}
+        run: |
+          BASE_URL="${HEALTH_URL%/health}"
+          export BASE_URL
+          bash -euo pipefail -c "$SMOKE_COMMAND"

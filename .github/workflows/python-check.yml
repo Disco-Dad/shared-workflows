@@ -1,0 +1,49 @@
+name: Python check
+
+# Checks one Python app under apps/<app>/ by running the caller's own justfile:
+# `just install <app>` (uv sync --locked) then `just check <app>`. CI and a
+# laptop run the same commands. The Python version comes from the app's
+# .python-version, which uv reads.
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: App folder name under apps/.
+        type: string
+        required: true
+      working-directory:
+        description: Folder holding the justfile and apps/ (default the repository root).
+        type: string
+        default: "."
+      just-version:
+        type: string
+        default: "1.59.0"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ inputs.app }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      APP: ${{ inputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          working-directory: ${{ inputs.working-directory }}/apps/${{ inputs.app }}
+          enable-cache: true
+          # Relative to working-directory above, not to the repository root.
+          cache-dependency-glob: uv.lock
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: ${{ inputs.just-version }}
+      - run: just install "$APP"
+      - run: just check "$APP"
