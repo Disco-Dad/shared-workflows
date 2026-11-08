@@ -1,0 +1,7 @@
+# actionlint 1.7.12 (the latest release) does not know concurrency `queue`
+# yet, which GitHub documents and the deploy workflows use. Ignore only that
+# error, only in those two files. Remove once actionlint supports `queue`.
+paths:
+  .github/workflows/{fly,cloudflare}-deploy.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

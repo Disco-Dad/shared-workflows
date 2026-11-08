@@ -38,6 +38,10 @@ jobs:
     concurrency:
       group: fly-deploy-${{ inputs.app }}
       cancel-in-progress: false
+      # Keep every waiting deploy (default keeps one and cancels the rest), so an
+      # older run can never push out the newest one; the stale guard below skips
+      # the older ones once they reach the front.
+      queue: max
     env:
       APP: ${{ inputs.app }}
       HEALTH_URL: ${{ inputs.health-url }}
