@@ -23,13 +23,13 @@ jobs:
     uses: ./.github/workflows/python-check.yml
     with:
       app: py-fixture
-      working-directory: tests/fixture
+      working-directory: ./tests/fixture
 
   node-check:
     uses: ./.github/workflows/node-check.yml
     with:
       app: node-fixture
-      working-directory: tests/fixture
+      working-directory: ./tests/fixture
 
   # Fails when any job above failed or was cancelled. No skips are allowed here.
   ci-ok:
