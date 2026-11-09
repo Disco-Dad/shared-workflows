@@ -40,15 +40,18 @@ Commands below use `NAME` for the repo name and `PURPOSE` for its purpose; subst
 
    GitHub copies the template in the background, so the clone can come back empty: pull
    until `.template/scaffold.py` exists (`git pull`, a few seconds apart). Then confirm the
-   template version is a release, because `add-app` later fetches exactly that tag:
+   copied `.template/` matches its release tag, because `add-app` later fetches exactly
+   that tag:
 
    ```sh
    version="$(cat .template/VERSION)"
-   gh api "repos/Disco-Dad/project-template/git/ref/tags/v$version" --silent
+   git fetch --no-tags https://github.com/Disco-Dad/project-template.git "refs/tags/v$version"
+   git diff --exit-code FETCH_HEAD HEAD -- .template
    ```
 
-   If the tag is missing, stop and tell the owner: `main` of the template has unreleased
-   changes. Done when the clone has `.template/scaffold.py` and the tag exists.
+   If the fetch fails or the diff is nonempty, stop and tell the owner; do not scaffold
+   from an unverified template. Done when the clone has `.template/scaffold.py`, the
+   release tag was fetched, and the copied `.template/` matches it.
 
 4. **Run the scaffold**, one `--app` per app (it writes lockfiles, so it needs network):
 
@@ -120,8 +123,23 @@ Commands below use `NAME` for the repo name and `PURPOSE` for its purpose; subst
    test commit is now on `main` (the reset does not remove it). Done when the
    push was rejected and `git status` shows `main` level with `origin/main`.
 
-10. **Wait for CI on `main`.** `gh run watch "$(gh run list --branch main --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status`.
-    Done when the run is green.
+10. **Wait for CI on the generated commit.** Select only `ci.yml`, since deploy workflows
+    also run on `main` and their credentials are set up after handover:
+
+    ```sh
+    generated_sha="$(git rev-parse HEAD)"
+    run_id="$(gh run list --workflow ci.yml --branch main --commit "$generated_sha" \
+      --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+    ```
+
+    If no run ID is returned, retry the lookup a few seconds apart for up to one minute;
+    stop and report if CI never appears. Once the ID is nonempty:
+
+    ```sh
+    gh run watch "$run_id" --exit-status
+    ```
+
+    Done when that commit's CI run is green.
 
 11. **Hand over.** Tell the owner the repo URL, the apps, and any setup only they can do:
     deploy steps in each `apps/APP/README.md` (tokens, GitHub environments), as a
