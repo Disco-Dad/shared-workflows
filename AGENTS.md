@@ -17,6 +17,9 @@ secrets, tokens or account IDs.
 | `cloudflare-deploy.yml` | astro-site apps: build artifact → Workers static assets |
 | `ci.yml` | this repo's own CI; ends in `ci-ok` |
 
+`skills/new-project/` is the owner's user-level skill that creates repos from
+`Disco-Dad/project-template` (installed with the skills CLI; see README.md).
+
 `tests/fixture/` is a minimal stand-in for a generated repo that `ci.yml` runs the check
 workflows against.
 
