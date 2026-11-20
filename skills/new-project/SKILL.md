@@ -31,7 +31,7 @@ Commands below use `NAME` for the repo name and `PURPOSE` for its purpose; subst
    passes.
 
 3. **Create and clone the repo** in the folder that holds the owner's repos (the parent of
-   the current repo, or `~/Documents/GitHub`):
+   the current repo, or `~/Developer`):
 
    ```sh
    gh repo create Disco-Dad/NAME --template Disco-Dad/project-template --private --clone
